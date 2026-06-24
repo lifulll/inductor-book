@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="260" viewBox="0 0 1120 260">
+  <style>
+    .box{fill:#f7f9fb;stroke:#334155;stroke-width:1.5;rx:8}
+    .hot{fill:#fff7ed;stroke:#c2410c}
+    .txt{font:16px sans-serif;fill:#0f172a}
+    .small{font:13px sans-serif;fill:#475569}
+    .arrow{stroke:#334155;stroke-width:2;marker-end:url(#a)}
+  </style>
+  <defs>
+    <marker id="a" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#334155"/>
+    </marker>
+  </defs>
+  <rect class="box" x="24" y="72" width="120" height="84"/>
+  <text class="txt" x="47" y="108">Python</text>
+  <text class="small" x="43" y="132">user code</text>
+  <line class="arrow" x1="144" y1="114" x2="194" y2="114"/>
+  <rect class="box" x="194" y="72" width="140" height="84"/>
+  <text class="txt" x="216" y="106">torch.compile</text>
+  <text class="small" x="218" y="132">__init__.py</text>
+  <line class="arrow" x1="334" y1="114" x2="384" y2="114"/>
+  <rect class="box" x="384" y="72" width="140" height="84"/>
+  <text class="txt" x="410" y="106">Dynamo</text>
+  <text class="small" x="405" y="132">eval_frame</text>
+  <line class="arrow" x1="524" y1="114" x2="574" y2="114"/>
+  <rect class="box" x="574" y="72" width="120" height="84"/>
+  <text class="txt" x="615" y="106">FX</text>
+  <text class="small" x="594" y="132">GraphModule</text>
+  <line class="arrow" x1="694" y1="114" x2="744" y2="114"/>
+  <rect class="box" x="744" y="72" width="140" height="84"/>
+  <text class="txt" x="771" y="106">AOTAutograd</text>
+  <text class="small" x="767" y="132">train path</text>
+  <line class="arrow" x1="884" y1="114" x2="934" y2="114"/>
+  <rect class="box hot" x="934" y="72" width="150" height="84"/>
+  <text class="txt" x="964" y="106">Inductor</text>
+  <text class="small" x="958" y="132">compile_fx.py</text>
+</svg>
+

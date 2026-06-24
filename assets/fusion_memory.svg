@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="380" viewBox="0 0 1000 380">
+  <style>
+    .box{fill:#f7f9fb;stroke:#334155;stroke-width:1.4;rx:8}
+    .mem{fill:#fefce8;stroke:#a16207}
+    .ker{fill:#ecfdf5;stroke:#047857}
+    .txt{font:16px sans-serif;fill:#0f172a}
+    .small{font:13px sans-serif;fill:#475569}
+    .arrow{stroke:#334155;stroke-width:2;marker-end:url(#a)}
+  </style>
+  <defs><marker id="a" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto"><path d="M0,0 L0,6 L9,3 z" fill="#334155"/></marker></defs>
+  <text class="txt" x="42" y="36">Eager: multiple kernels and intermediate memory traffic</text>
+  <rect class="ker" x="50" y="70" width="120" height="60"/><text class="txt" x="82" y="106">add</text>
+  <line class="arrow" x1="170" y1="100" x2="230" y2="100"/>
+  <rect class="mem" x="230" y="70" width="120" height="60"/><text class="txt" x="258" y="106">buf a</text>
+  <line class="arrow" x1="350" y1="100" x2="410" y2="100"/>
+  <rect class="ker" x="410" y="70" width="120" height="60"/><text class="txt" x="446" y="106">relu</text>
+  <line class="arrow" x1="530" y1="100" x2="590" y2="100"/>
+  <rect class="mem" x="590" y="70" width="120" height="60"/><text class="txt" x="618" y="106">buf b</text>
+  <line class="arrow" x1="710" y1="100" x2="770" y2="100"/>
+  <rect class="ker" x="770" y="70" width="120" height="60"/><text class="txt" x="806" y="106">mul</text>
+  <text class="txt" x="42" y="210">Inductor fusion: one loop/kernel can compute the final value</text>
+  <rect class="box" x="80" y="245" width="180" height="68"/><text class="txt" x="124" y="284">x, y input</text>
+  <line class="arrow" x1="260" y1="279" x2="375" y2="279"/>
+  <rect class="ker" x="375" y="235" width="250" height="88"/><text class="txt" x="428" y="272">fused kernel</text><text class="small" x="417" y="296">add + relu + multiply</text>
+  <line class="arrow" x1="625" y1="279" x2="740" y2="279"/>
+  <rect class="box" x="740" y="245" width="180" height="68"/><text class="txt" x="778" y="284">output</text>
+</svg>
+
