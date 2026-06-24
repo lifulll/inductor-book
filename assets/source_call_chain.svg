@@ -1,0 +1,80 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="520" viewBox="0 0 1200 520">
+  <style>
+    .box{fill:#f8fafc;stroke:#334155;stroke-width:1.3;rx:8}
+    .hot{fill:#ecfeff;stroke:#0891b2}
+    .op{fill:#fff7ed;stroke:#c2410c}
+    .cg{fill:#f0fdf4;stroke:#15803d}
+    .txt{font:15px sans-serif;fill:#0f172a}
+    .small{font:12px sans-serif;fill:#475569}
+    .arrow{stroke:#334155;stroke-width:2;marker-end:url(#a)}
+    .dash{stroke:#64748b;stroke-width:1.5;stroke-dasharray:6 4;marker-end:url(#a)}
+  </style>
+  <defs>
+    <marker id="a" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L9,3 z" fill="#334155"/>
+    </marker>
+  </defs>
+  <text class="txt" x="36" y="34">TorchInductor source-level call chain, PyTorch 2.7.1</text>
+
+  <rect class="box" x="42" y="70" width="178" height="72"/>
+  <text class="txt" x="72" y="100">compile_fx</text>
+  <text class="small" x="62" y="124">compile_fx.py</text>
+
+  <line class="arrow" x1="220" y1="106" x2="272" y2="106"/>
+  <rect class="box" x="272" y="70" width="200" height="72"/>
+  <text class="txt" x="302" y="100">compile_fx_inner</text>
+  <text class="small" x="298" y="124">debug, cache, context</text>
+
+  <line class="arrow" x1="472" y1="106" x2="524" y2="106"/>
+  <rect class="box" x="524" y="70" width="208" height="72"/>
+  <text class="txt" x="552" y="100">fx_codegen_and_compile</text>
+  <text class="small" x="558" y="124">FxCompile scheme</text>
+
+  <line class="arrow" x1="732" y1="106" x2="784" y2="106"/>
+  <rect class="hot" x="784" y="70" width="206" height="72"/>
+  <text class="txt" x="812" y="100">GraphLowering</text>
+  <text class="small" x="806" y="124">graph.py, FX Interpreter</text>
+
+  <line class="arrow" x1="887" y1="142" x2="887" y2="192"/>
+  <rect class="hot" x="784" y="192" width="206" height="72"/>
+  <text class="txt" x="812" y="222">call_function</text>
+  <text class="small" x="804" y="246">lowerings[target](...)</text>
+
+  <line class="arrow" x1="784" y1="228" x2="690" y2="228"/>
+  <rect class="op" x="464" y="192" width="226" height="72"/>
+  <text class="txt" x="506" y="222">lowering.py</text>
+  <text class="small" x="486" y="246">Pointwise / Reduction / view</text>
+
+  <line class="dash" x1="577" y1="264" x2="577" y2="322"/>
+  <rect class="op" x="464" y="322" width="226" height="72"/>
+  <text class="txt" x="508" y="352">kernel/mm.py</text>
+  <text class="small" x="488" y="376">tuned_mm, tuned_addmm</text>
+
+  <line class="dash" x1="690" y1="358" x2="784" y2="358"/>
+  <rect class="op" x="784" y="322" width="206" height="72"/>
+  <text class="txt" x="814" y="352">select_algorithm</text>
+  <text class="small" x="810" y="376">choices, autotune</text>
+
+  <line class="arrow" x1="887" y1="264" x2="887" y2="322"/>
+  <line class="arrow" x1="887" y1="394" x2="887" y2="436"/>
+  <rect class="hot" x="784" y="436" width="206" height="60"/>
+  <text class="txt" x="830" y="461">Scheduler</text>
+  <text class="small" x="818" y="482">fusion, ordering</text>
+
+  <line class="arrow" x1="990" y1="466" x2="1038" y2="466"/>
+  <rect class="cg" x="1038" y="314" width="128" height="58"/>
+  <text class="txt" x="1062" y="338">Triton</text>
+  <text class="small" x="1050" y="358">codegen/triton.py</text>
+
+  <rect class="cg" x="1038" y="388" width="128" height="58"/>
+  <text class="txt" x="1070" y="412">C++</text>
+  <text class="small" x="1054" y="432">codegen/cpp.py</text>
+
+  <rect class="cg" x="1038" y="462" width="128" height="48"/>
+  <text class="txt" x="1064" y="484">Wrapper</text>
+  <text class="small" x="1050" y="502">AsyncCompile</text>
+
+  <line class="dash" x1="990" y1="466" x2="1038" y2="344"/>
+  <line class="dash" x1="990" y1="466" x2="1038" y2="418"/>
+</svg>
+

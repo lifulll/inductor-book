@@ -6,6 +6,16 @@
 
 本章进入 Inductor 的核心内部：`GraphLowering` 如何把 FX Graph 转换成 Inductor IR。读完后你应该知道 `TensorBox`、`StorageBox`、`ComputedBuffer`、`Pointwise`、`Reduction`、`Layout` 这些名字大概代表什么。
 
+本章承接第 7 章的这一行源码主线：
+
+```text
+_InProcessFxCompile.codegen_and_compile
+  -> graph = GraphLowering(...)
+  -> graph.run(*example_inputs)
+```
+
+`graph.run(...)` 是本章的入口。它会像 FX Interpreter 一样遍历 `GraphModule`，但每个节点的执行结果不是 eager Tensor，而是 Inductor IR。
+
 ## 背景知识
 
 FX Graph 适合表达 PyTorch 算子级计算，但代码生成还需要更低层的信息：
@@ -39,6 +49,19 @@ class GraphLowering(torch.fx.Interpreter):
 
 但它解释节点时，产物不是 eager Tensor，而是 Inductor IR 对象。
 
+源码定位：
+
+```text
+/usr/local/lib/python3.11/site-packages/torch/_inductor/graph.py
+  class GraphLowering: 约 266 行
+  run: 约 875 行
+  call_function: 约 1114 行
+  output: 约 1264 行
+  codegen: 约 1994 行
+```
+
+读 `GraphLowering` 时要抓住一个继承关系：它继承 `torch.fx.Interpreter`。所以 `placeholder`、`call_function`、`output` 这些 FX 节点，会分派到对应方法。
+
 ### `TensorBox` 与 `StorageBox`
 
 `torch/_inductor/ir.py` 中有：
@@ -55,6 +78,21 @@ class StorageBox
 - `TensorBox.realize()` 往往意味着把懒表达 materialize 成实际 buffer。
 
 这种 box 设计让 Inductor 可以延迟决定是否真的分配中间结果。
+
+一个简化的 mental model：
+
+```text
+TensorBox
+  持有 StorageBox
+    持有真正的 IR data
+      可能是 Pointwise
+      可能是 Reduction
+      可能是 ComputedBuffer
+      可能是 View
+      可能是 ExternKernel
+```
+
+这套包装不是为了复杂而复杂。它允许 Inductor 先把计算表达为“可以被读取的值”，再在 Scheduler 阶段决定是否 fusion、何时 materialize。
 
 ### `ComputedBuffer`
 
@@ -90,6 +128,92 @@ FlexibleLayout
 ```
 
 layout 不是附属细节，它会影响索引表达、内存连续性、fusion 可行性和后端选择。
+
+在源码里，layout 对象经常跟这些问题绑定：
+
+- `get_size()`：输出 shape。
+- `get_stride()`：输出 stride。
+- `get_device()`：选择 CPU/GPU 后端。
+- `get_dtype()`：决定类型提升和代码生成类型。
+- `make_indexer()`：把逻辑索引映射到物理内存偏移。
+
+当你看到某个 kernel 生成了很复杂的索引表达，通常可以回到对应 IR 的 layout 查原因。
+
+## 源码调用链解读
+
+### 1. `graph.run` 不是执行 Tensor，而是执行 lowering
+
+第 7 章看到 `_InProcessFxCompile` 调用：
+
+```text
+graph.run(*example_inputs)
+```
+
+这个调用最终来自 FX Interpreter。解释执行到一个 `call_function` 节点时，会进入 `GraphLowering.call_function`。
+
+### 2. `call_function` 查 `lowerings`
+
+2.7.1 中 `GraphLowering.call_function` 的核心逻辑可以概括为：
+
+```text
+if target not in lowerings:
+    尝试 fallback 或报 MissingOperator
+else:
+    selected_lowering = lowerings[target]
+    out = selected_lowering(*args, **kwargs)
+```
+
+这里的 `target` 通常是 `torch.ops.aten.*` 的某个 overload，例如：
+
+```text
+aten.add.Tensor
+aten.relu.default
+aten.sum.dim_IntList
+aten.mm.default
+```
+
+这就是第 8 章和第 10、11 章的连接点：普通 pointwise/reduction 去 `lowering.py`，matmul/conv 等大算子可能去 `kernel/` 目录里的专门 lowering。
+
+### 3. missing lowering 时发生什么
+
+`call_function` 中如果找不到 lowering，会按情况处理：
+
+- 如果 op 在 fallback allow list 中，创建 fallback。
+- 如果开启 implicit fallback，尝试保守 fallback。
+- 如果存在 decomposition 但没有应用，会抛 `MissingOperatorWithDecomp`。
+- 否则抛 `MissingOperatorWithoutDecomp`。
+
+这对调试非常重要。看到“unsupported operator”时，不要直接去 codegen 里找；先看这个 op 有没有进入 `lowerings`，有没有 decomposition，或者是否被 fallback。
+
+### 4. `output` 会强制实现一部分值
+
+`GraphLowering.output` 会把解释器得到的结果整理成输出列表，并调用类似：
+
+```text
+ir.ExternKernel.realize_input(x)
+```
+
+这意味着输出边界通常会把懒表达变成某种可返回的实体。中间 pointwise 可以保持懒，但函数输出最终需要有明确的 buffer/view/常量表达。
+
+### 5. `GraphLowering` 收集 Scheduler 的输入
+
+`GraphLowering` 在 lowering 过程中不断填充：
+
+```text
+self.operations
+self.buffers
+self.graph_inputs
+self.graph_outputs
+self.constants
+```
+
+第 9 章的 Scheduler 会消费 `self.operations`：
+
+```text
+Scheduler(self.operations)
+```
+
+所以可以把第 8 章理解成“生产调度素材”的阶段。
 
 ## 一个最小 PyTorch 示例
 
@@ -138,6 +262,26 @@ GraphLowering 在解释过程中维护：
 
 这些字段在后续 scheduler 和 wrapper codegen 中会继续使用。
 
+更贴近源码的对象流是：
+
+```text
+FX placeholder
+  -> GraphLowering.placeholder
+  -> InputBuffer / TensorBox
+
+FX call_function target
+  -> GraphLowering.call_function
+  -> lowerings[target]
+  -> TensorBox / IRNode / ExternKernel
+
+FX output
+  -> GraphLowering.output
+  -> graph_outputs
+
+GraphLowering.operations
+  -> Scheduler(self.operations)
+```
+
 ## TorchInductor 内部大致发生了什么
 
 对 pointwise 链，Inductor 倾向于保持懒表达：
@@ -155,6 +299,56 @@ TensorBox(add)
 - 后端限制要求 materialize。
 - 输出需要稳定 layout。
 
+源码阅读时，建议把 `realize()` 当作一个“边界信号”：
+
+```text
+还没 realize:
+  这个值可能只是一个可内联的表达，可以继续 fusion。
+
+已经 realize:
+  这个值大概率已经需要一个具名 buffer，后续调度会把它当作依赖节点。
+```
+
+这不是绝对规则，但对初学者读源码很有帮助。
+
+## 例子：`relu(x + 1) * 2` 如何经过 GraphLowering
+
+假设 FX 图已经是 ATen 风格：
+
+```text
+placeholder x
+call_function aten.add.Tensor
+call_function aten.relu.default
+call_function aten.mul.Tensor
+output
+```
+
+GraphLowering 的处理顺序是：
+
+```text
+placeholder x
+  -> 创建输入 TensorBox
+
+aten.add.Tensor
+  -> lowerings[aten.add.Tensor]
+  -> make_pointwise 风格 lowering
+  -> 返回 TensorBox(add expression)
+
+aten.relu.default
+  -> lowerings[aten.relu.default]
+  -> 继续包装 pointwise expression
+
+aten.mul.Tensor
+  -> lowerings[aten.mul.Tensor]
+  -> 继续包装 pointwise expression
+
+output
+  -> 标记 graph_outputs
+  -> 必要时 realize
+```
+
+到这一步还没有真正生成 Triton 或 C++。只是形成了 Inductor 能调度的 IR。下一章的 Scheduler 会决定这些表达是否融合为一个 kernel。
+
 ## 关键源码入口
 
 ```text
@@ -163,6 +357,19 @@ TensorBox(add)
 /usr/local/lib/python3.11/site-packages/torch/_inductor/lowering.py
 /usr/local/lib/python3.11/site-packages/torch/_inductor/virtualized.py
 /usr/local/lib/python3.11/site-packages/torch/_inductor/sizevars.py
+```
+
+和上下章的连接：
+
+```text
+上一章 compile_fx.py:
+  GraphLowering(...) 和 graph.run(...)
+
+本章 graph.py / ir.py:
+  FX node -> lowerings[target] -> IR
+
+下一章 scheduler.py:
+  Scheduler(self.operations) -> fusion -> backend.codegen_node(...)
 ```
 
 建议搜索：
@@ -200,4 +407,3 @@ GraphLowering 是 Inductor 从图到内部世界的入口。它把 FX 节点 low
 
 - IR 类字段经常调整，本章解释以概念为主。
 - `TensorBox.realize()` 的触发条件复杂，应针对具体版本和具体图核查。
-

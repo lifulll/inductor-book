@@ -2,9 +2,26 @@
 
 ![Inductor 内部总览](./assets/inductor_inside.svg)
 
+![源码调用链](./assets/source_call_chain.svg)
+
 ## 本章目标
 
 本章正式进入 Inductor。我们以本环境 PyTorch 2.7.1 的 `torch/_inductor/compile_fx.py` 为准，解释 `compile_fx`、`compile_fx_inner` 和 `fx_codegen_and_compile` 的职责分工。
+
+从本章开始到第 12 章，我们不再按“概念列表”来理解 Inductor，而是顺着源码调用链阅读：
+
+```text
+compile_fx
+  -> compile_fx_inner
+  -> _compile_fx_inner
+  -> fx_codegen_and_compile
+  -> _InProcessFxCompile.codegen_and_compile
+  -> GraphLowering(...)
+  -> graph.run(...)
+  -> graph.compile_to_module().call
+```
+
+这一章的重点是弄清楚：Inductor 编译入口接收什么、预处理什么、何时进入 `GraphLowering`。
 
 ## 背景知识
 
@@ -37,6 +54,15 @@ compile_fx(gm, example_inputs)
 
 因此，`compile_fx` 是“端到端编译编排入口”。
 
+源码定位：
+
+```text
+/usr/local/lib/python3.11/site-packages/torch/_inductor/compile_fx.py
+  compile_fx: 约 1706 行
+```
+
+阅读时注意它的文档字符串：这个函数虽然在 `torch._inductor` 下，但它会编排 AOTAutograd，再让 `inner_compile` 编译单张图。换句话说，`compile_fx` 是 backend 入口，不只是“生成代码”的函数。
+
 ### `compile_fx_inner`
 
 `compile_fx_inner` 编译单张图。它会建立一组上下文：
@@ -49,6 +75,15 @@ compile_fx(gm, example_inputs)
 
 然后进入 `_compile_fx_inner`。
 
+源码定位：
+
+```text
+compile_fx_inner: 约 582 行
+_compile_fx_inner: 约 641 行
+```
+
+`compile_fx_inner` 的特点是上下文很多，业务逻辑反而不在这里。它像一层“编译保护壳”，负责计时、debug、fresh cache、callback、错误包装。真正决定 cache hit/miss 和 codegen 的逻辑在 `_compile_fx_inner`。
+
 ### `_compile_fx_inner`
 
 `_compile_fx_inner` 更接近 Inductor 真正图编译：
@@ -60,6 +95,8 @@ compile_fx(gm, example_inputs)
 - 处理 FX graph cache。
 - cache miss 时调用 `fx_codegen_and_compile`。
 
+这里可以把 `FxGraphCache` 理解为 Inductor 层面的“整图编译缓存”。如果 key 能命中，就不需要再走 `GraphLowering`、Scheduler 和 codegen。若 cache bypass 或 miss，才进入后面的代码生成。
+
 ### `fx_codegen_and_compile`
 
 本环境中，它根据 `FxCompileMode` 选择编译方案：
@@ -69,6 +106,113 @@ compile_fx(gm, example_inputs)
 - subprocess：子进程编译。
 
 默认主线会进入 in-process codegen，然后创建 `GraphLowering` 并生成代码。
+
+源码定位：
+
+```text
+fx_codegen_and_compile: 约 1274 行
+_InProcessFxCompile.codegen_and_compile: 约 893 行
+```
+
+`fx_codegen_and_compile` 本身很短，它的关键作用是选择编译方案：
+
+```text
+FxCompileMode.NORMAL      -> _InProcessFxCompile
+FxCompileMode.SERIALIZE   -> _DebugSerdeFxCompile
+FxCompileMode.SUBPROCESS  -> _SubprocessFxCompile
+```
+
+一般读者第一遍只需要跟 `NORMAL` 路径。调试序列化、子进程编译、远程执行时，再看另外两条路径。
+
+## 源码调用链解读
+
+### 第一步：`compile_fx` 先处理“图外问题”
+
+`compile_fx` 面对的不是干净的单张低层图。它要处理：
+
+- 用户传进来的 `config_patches`。
+- 是否使用 C++ wrapper。
+- 是否要调用 AOTAutograd。
+- decomposition 表。
+- inference/training 相关分支。
+
+这一步的输出不是最终代码，而是一次或多次对 `inner_compile` 的调用。默认 `inner_compile` 就是 `compile_fx_inner`。
+
+### 第二步：`_compile_fx_inner` 处理 cache 和编译分发
+
+`_compile_fx_inner` 会先判断一些快速路径，例如图里没有真正 call 时，可能直接返回 `gm.forward` 的 boxed 版本。正常有计算的图会继续：
+
+```text
+static_input_idxs
+inputs_to_check
+cudagraphs option
+FxGraphCache.prepare_key
+FxGraphCache.load_with_key
+fx_codegen_and_compile
+```
+
+这里的 `inputs_to_check` 很容易被忽略。它和 GPU 输入对齐有关：Triton 代码可能假设输入对齐，如果运行时发现输入不满足假设，需要 clone 成对齐布局。这个检查发生在进入真正 codegen 前。
+
+### 第三步：`_InProcessFxCompile` 创建 `GraphLowering`
+
+在 2.7.1 的 `_InProcessFxCompile.codegen_and_compile` 中，主线非常清楚：
+
+```text
+view_to_reshape(gm)
+fake_tensor_prop(gm, example_inputs)
+record_original_output_strides(gm)
+_recursive_post_grad_passes(gm)
+GraphLowering(...)
+with V.set_graph_handler(graph):
+    graph.run(*example_inputs)
+    graph.freeze_runtime_asserts()
+    compiled_fn = graph.compile_to_module().call
+```
+
+这段是从第 7 章到第 8、9、12 章的桥：
+
+- `graph.run(*example_inputs)` 进入第 8 章，开始把 FX 节点 lowering 成 IR。
+- `graph.compile_to_module()` 进入第 9 和第 12 章，开始调度、fusion、代码生成和加载。
+
+### 第四步：post-grad passes 在 lowering 前运行
+
+源码中有 `_recursive_post_grad_passes(gm, is_inference=is_inference)`。这说明 Inductor 在 `GraphLowering` 之前，还会对 FX graph 做一批 post-grad pass。它们位于：
+
+```text
+torch/_inductor/fx_passes/
+```
+
+这些 pass 可能做 pattern rewrite、融合前改写、布局相关优化等。读源码时要记住：`GraphLowering` 看到的图，可能已经不是 Dynamo/AOTAutograd 最初产出的图。
+
+## 关键源码片段如何读
+
+建议读 `_InProcessFxCompile.codegen_and_compile` 时只抓五个锚点：
+
+```text
+1. fake_tensor_prop
+   填充 shape、dtype、device、stride 等元信息。
+
+2. _recursive_post_grad_passes
+   在进入 Inductor IR 前做 FX 层 pass。
+
+3. GraphLowering(...)
+   创建 Inductor 图 lowering 对象。
+
+4. graph.run(*example_inputs)
+   解释 FX Graph，生成 IR operations/buffers。
+
+5. graph.compile_to_module().call
+   触发 scheduler/codegen/codecache，返回可执行函数。
+```
+
+如果读者只看一处源码，本章最推荐看：
+
+```text
+/usr/local/lib/python3.11/site-packages/torch/_inductor/compile_fx.py
+  _InProcessFxCompile.codegen_and_compile
+```
+
+因为它把前面的 FX 图和后面的 Inductor 内部世界接了起来。
 
 ## 一个最小 PyTorch 示例
 
@@ -116,6 +260,24 @@ compile_fx
 
 `compile_fx` 是 orchestration；`GraphLowering` 才开始把 FX 节点变成 Inductor IR。
 
+更贴近源码的版本是：
+
+```text
+compile_fx
+  -> recursive_compile_fx / AOTAutograd path
+  -> compile_fx_inner
+  -> _compile_fx_inner
+     -> FxGraphCache.prepare_key / load_with_key
+     -> fx_codegen_and_compile
+        -> _InProcessFxCompile.codegen_and_compile
+           -> view_to_reshape
+           -> fake_tensor_prop
+           -> _recursive_post_grad_passes
+           -> GraphLowering(...)
+           -> graph.run(...)
+           -> graph.compile_to_module().call
+```
+
 ## TorchInductor 内部大致发生了什么
 
 以 `f(x, y) = relu(x + y) * 2` 为例：
@@ -130,6 +292,19 @@ compile_fx
 8. Codegen 生成 wrapper 和 kernel。
 9. CodeCache 编译/加载 Python module。
 
+如果打开：
+
+```bash
+TORCH_LOGS=output_code TORCH_COMPILE_DEBUG=1 python example.py
+```
+
+可以把日志和源码对起来：
+
+- FX graph 相关 artifact 对应 `V.debug.fx_graph(...)`。
+- post-grad graph 对应 `V.debug.fx_graph_transformed(...)`。
+- generated wrapper 对应 `GraphLowering._compile_to_module` 里的 output code。
+- 如果使用 Triton，kernel 编译会继续进入 `AsyncCompile.triton`。
+
 ## 关键源码入口
 
 ```text
@@ -138,6 +313,20 @@ compile_fx
 /usr/local/lib/python3.11/site-packages/torch/_inductor/output_code.py
 /usr/local/lib/python3.11/site-packages/torch/_inductor/codecache.py
 /usr/local/lib/python3.11/site-packages/torch/_inductor/debug.py
+```
+
+第 7-12 章连续阅读时的源码顺序：
+
+```text
+compile_fx.py
+  -> graph.py
+  -> lowering.py / ir.py
+  -> scheduler.py
+  -> kernel/mm.py / select_algorithm.py
+  -> codegen/wrapper.py
+  -> codegen/triton.py or codegen/cpp.py
+  -> async_compile.py
+  -> codecache.py
 ```
 
 建议搜索：
@@ -175,4 +364,3 @@ rg -n "class GraphLowering|def compile_to_module|def codegen" torch/_inductor/gr
 
 - `FxCompileMode` 默认值和子进程编译行为可能随版本变化。
 - remote cache、bundle Triton、AOTInductor 路径本章只做入门介绍，后续需要单独核查。
-
